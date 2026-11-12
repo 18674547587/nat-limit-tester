@@ -41,9 +41,11 @@ public final class TcpRamp {
 
     public static final class Level {
         public int target;
-        public int ok;
-        public int failed;
+        public int ok;          // 本级新建成功数
+        public int failed;      // 本级新建失败数
+        public int alive;       // 累计存活连接数
         public long buildMs;
+        public final java.util.List<Double> gwSamples = new java.util.ArrayList<>();
         public final Map<String, Integer> errors = new LinkedHashMap<>();
         public double baseGw = -1, baseOnu = -1;
         public double worstGw = -1, worstOnu = -1, worstSrv = -1;
@@ -104,8 +106,15 @@ public final class TcpRamp {
 
             double baseGw = TcpProbe.median(cfg.gwHost, cfg.probePort, cfg.probeTimeoutMs, 5);
             double baseOnu = TcpProbe.median(cfg.onuHost, cfg.probePort, cfg.probeTimeoutMs, 5);
+            // 基线太低会让阈值失真（3.8ms × 5 = 19ms，WiFi 一次重传就超）
+            if (baseGw > 0 && baseGw < 5) baseGw = 5;
+            if (baseOnu > 0 && baseOnu < 5) baseOnu = 5;
             cb.onLog(String.format("基线 RTT：路由器 %s / 光猫 %s",
                     fmt(baseGw), fmt(baseOnu)));
+            if (baseGw > 10) {
+                cb.onLog("⚠ 基线 RTT " + String.format("%.1f", baseGw)
+                        + " ms 偏高（局域网正常 1~3 ms），WiFi 质量可能较差，结果仅供参考");
+            }
 
             int target = cfg.start;
             Level last = null;
@@ -174,6 +183,8 @@ public final class TcpRamp {
         }
         sample(lv);
 
+        lv.alive = live.size();
+
         // 与服务端对账（服务端才是权威）
         if (!cfg.statsUrl.isEmpty()) {
             long[] s = StatsClient.fetch(cfg.statsUrl, cfg.statsToken);
@@ -191,7 +202,10 @@ public final class TcpRamp {
         double s = TcpProbe.once(cfg.host, cfg.port, cfg.probeTimeoutMs);
 
         if (g < 0) { if (!cfg.gwHost.isEmpty()) lv.gwProbeFail++; }
-        else if (g > lv.worstGw) lv.worstGw = g;
+        else {
+            if (g > lv.worstGw) lv.worstGw = g;
+            lv.gwSamples.add(g);
+        }
 
         if (o < 0) { if (!cfg.onuHost.isEmpty()) lv.onuProbeFail++; }
         else if (o > lv.worstOnu) lv.worstOnu = o;
@@ -262,16 +276,38 @@ public final class TcpRamp {
             lv.detail = "保持期 " + lv.onuProbeFail + " 次探测失败";
             return;
         }
-        if (lv.baseGw > 0 && lv.worstGw > lv.baseGw * 5 && lv.worstGw > lv.baseGw + 5) {
-            lv.verdict = "路由器响应延迟劣化";
-            lv.detail = String.format("最差 %.1f ms，基线 %.1f ms（%.1f 倍）",
-                    lv.worstGw, lv.baseGw, lv.worstGw / lv.baseGw);
+        // NAT 代答：客户端握手成功但服务端没收到 —— 这是 NAT 表满最典型的表现
+        if (lv.serverCurrent >= 0 && lv.alive > 0 && lv.serverCurrent < lv.alive * 0.9) {
+            lv.verdict = "NAT 代答：服务端没收到全部连接";
+            lv.detail = "客户端存活 " + lv.alive + "，服务端只看到 " + lv.serverCurrent
+                    + "（" + (100 * lv.serverCurrent / lv.alive) + "%），说明有设备替客户端回了握手";
             return;
         }
-        if (lv.baseOnu > 0 && lv.worstOnu > lv.baseOnu * 5 && lv.worstOnu > lv.baseOnu + 5) {
+
+        // 用 P90 而不是最大值：单次抖动（WiFi 重传）不该判死刑
+        double p90Gw = p90(lv.gwSamples);
+        double thrGw = Math.max(lv.baseGw * 5, 50);
+        if (lv.baseGw > 0 && p90Gw > thrGw) {
+            lv.verdict = "路由器响应延迟劣化";
+            lv.detail = String.format("P90 %.1f ms（最差 %.1f），基线 %.1f，阈值 %.0f",
+                    p90Gw, lv.worstGw, lv.baseGw, thrGw);
+            return;
+        }
+        if (lv.baseOnu > 0 && lv.worstOnu > Math.max(lv.baseOnu * 5, 50)) {
             lv.verdict = "光猫响应延迟劣化";
             lv.detail = String.format("最差 %.1f ms，基线 %.1f ms", lv.worstOnu, lv.baseOnu);
         }
+    }
+
+    /** 90 分位，忽略单次尖刺 */
+    private static double p90(java.util.List<Double> v) {
+        if (v == null || v.isEmpty()) return -1;
+        java.util.List<Double> c = new java.util.ArrayList<>(v);
+        java.util.Collections.sort(c);
+        int i = (int) Math.ceil(c.size() * 0.9) - 1;
+        if (i < 0) i = 0;
+        if (i >= c.size()) i = c.size() - 1;
+        return c.get(i);
     }
 
     private static String fmt(double v) { return v < 0 ? "无响应" : String.format("%.1f ms", v); }

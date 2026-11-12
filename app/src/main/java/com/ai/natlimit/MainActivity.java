@@ -248,13 +248,13 @@ public class MainActivity extends Activity implements TcpRamp.Cb, UdpRamp.Cb {
             errs.append(e.getKey()).append('×').append(e.getValue());
         }
         String row = String.format(Locale.US,
-                "%5d | 成功 %5d 失败 %4d | 建连 %5dms | 路由 %s 光猫 %s | 服务端 %d/%d | %s",
-                lv.target, lv.ok, lv.failed, lv.buildMs,
+                "%5d | 累计 %5d 新建 %4d 失败 %3d | 建连 %5dms | 路由 %s 光猫 %s | 服务端 %d/%d | %s",
+                lv.target, lv.alive, lv.ok, lv.failed, lv.buildMs,
                 rtt(lv.worstGw), rtt(lv.worstOnu), lv.serverCurrent, lv.serverPeak,
                 lv.degraded() ? "⚠ " + lv.verdict : "ok");
 
-        rows.add(String.format(Locale.US, "%d,%d,%d,%d,%s,%s,%s,%d,%d,%s,%s",
-                lv.target, lv.ok, lv.failed, lv.buildMs,
+        rows.add(String.format(Locale.US, "%d,%d,%d,%d,%d,%s,%s,%s,%d,%d,%s,%s",
+                lv.target, lv.alive, lv.ok, lv.failed, lv.buildMs,
                 f(lv.worstGw), f(lv.worstOnu),
                 errs.toString().replace(",", ";"),
                 lv.serverCurrent, lv.serverPeak,
@@ -271,7 +271,7 @@ public class MainActivity extends Activity implements TcpRamp.Cb, UdpRamp.Cb {
     public void onDone(TcpRamp.Level stop, String summary) {
         finish("TCP", stop == null ? -1 : stop.target,
                 stop == null ? "" : stop.detail, summary,
-                "target,ok,failed,build_ms,worst_rtt_gw,worst_rtt_onu,errors,server_current,server_peak,verdict,detail");
+                "target,alive,new_ok,new_failed,build_ms,worst_rtt_gw,worst_rtt_onu,errors,server_current,server_peak,verdict,detail");
     }
 
     // ---------- UDP 回调 ----------
@@ -279,8 +279,8 @@ public class MainActivity extends Activity implements TcpRamp.Cb, UdpRamp.Cb {
     @Override
     public void onLevel(UdpRamp.Level lv) {
         String row = String.format(Locale.US,
-                "%5d | 已发 %5d 失败 %4d | 发送 %5dms | 路由 %s | 服务端会话 %d/%d | %s",
-                lv.target, lv.sent, lv.sendFailed, lv.sendMs,
+                "%5d | 会话 %5d 本轮发 %5d 失败 %3d | 发送 %5dms | 路由 %s | 服务端会话 %d/%d | %s",
+                lv.target, lv.socksOpen, lv.sent, lv.sendFailed, lv.sendMs,
                 rtt(lv.worstGw), lv.serverSessions, lv.serverPeak,
                 lv.degraded() ? "⚠ " + lv.verdict : "ok");
 

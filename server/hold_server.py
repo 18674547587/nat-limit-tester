@@ -266,15 +266,16 @@ async def respond_http(writer: asyncio.StreamWriter, head: bytes) -> None:
         if kv.startswith("token="):
             given = kv[6:]
 
-    if token and given != token:
-        body, status = b'{"ok":false,"error":"bad token"}', "403 Forbidden"
-    elif path == "/stats":
+    # /stats 与 /ping 只读且不含敏感信息，免 token（App 免配置即可对账）
+    if path == "/stats":
         body, status = json.dumps(STATS.snapshot()).encode(), "200 OK"
+    elif path == "/ping":
+        body, status = b'{"ok":true}', "200 OK"
+    elif token and given != token:
+        body, status = b'{"ok":false,"error":"bad token"}', "403 Forbidden"
     elif path == "/reset":
         STATS.reset()
         body, status = b'{"ok":true,"reset":true}', "200 OK"
-    elif path == "/ping":
-        body, status = b'{"ok":true}', "200 OK"
     else:
         body, status = b'{"ok":false,"error":"not found"}', "404 Not Found"
 

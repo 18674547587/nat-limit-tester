@@ -45,6 +45,7 @@ public final class UdpRamp {
         public int serverSessions = -1;
         public int serverPeak = -1;
         public double baseGw = -1, worstGw = -1;
+        public final java.util.List<Double> gwSamples = new java.util.ArrayList<>();
         public int gwProbeFail = 0;
         public String verdict = "";
         public String detail = "";
@@ -96,6 +97,7 @@ public final class UdpRamp {
             cb.onLog("fd 上限 " + lim[0] + "，UDP 最多可建约 " + fdCap + " 条会话");
 
             double baseGw = TcpProbe.median(cfg.gwHost, cfg.probePort, cfg.probeTimeoutMs, 5);
+            if (baseGw > 0 && baseGw < 5) baseGw = 5;
             cb.onLog(String.format("基线 RTT：路由器 %s",
                     baseGw < 0 ? "无响应" : String.format("%.1f ms", baseGw)));
 
@@ -183,7 +185,10 @@ public final class UdpRamp {
             resend(addr);
             double g = TcpProbe.once(cfg.gwHost, cfg.probePort, cfg.probeTimeoutMs);
             if (g < 0) { if (!cfg.gwHost.isEmpty()) lv.gwProbeFail++; }
-            else if (g > lv.worstGw) lv.worstGw = g;
+            else {
+                if (g > lv.worstGw) lv.worstGw = g;
+                lv.gwSamples.add(g);
+            }
         }
 
         sleep(600);
@@ -220,9 +225,12 @@ public final class UdpRamp {
             lv.detail = "保持期 " + lv.gwProbeFail + " 次探测失败";
             return;
         }
-        if (lv.baseGw > 0 && lv.worstGw > lv.baseGw * 5 && lv.worstGw > lv.baseGw + 5) {
+        double p90Gw = p90(lv.gwSamples);
+        double thrGw = Math.max(lv.baseGw * 5, 50);
+        if (lv.baseGw > 0 && p90Gw > thrGw) {
             lv.verdict = "路由器响应延迟劣化";
-            lv.detail = String.format("最差 %.1f ms，基线 %.1f ms", lv.worstGw, lv.baseGw);
+            lv.detail = String.format("P90 %.1f ms（最差 %.1f），基线 %.1f，阈值 %.0f",
+                    p90Gw, lv.worstGw, lv.baseGw, thrGw);
             return;
         }
         if (lv.serverSessions >= 0 && lv.serverSessions < lv.target * 0.85) {
@@ -230,6 +238,16 @@ public final class UdpRamp {
             lv.detail = "目标 " + lv.target + "，服务端只看到 " + lv.serverSessions
                     + " 条（" + (100 * lv.serverSessions / Math.max(1, lv.target)) + "%）";
         }
+    }
+
+    private static double p90(java.util.List<Double> v) {
+        if (v == null || v.isEmpty()) return -1;
+        java.util.List<Double> c = new java.util.ArrayList<>(v);
+        java.util.Collections.sort(c);
+        int i = (int) Math.ceil(c.size() * 0.9) - 1;
+        if (i < 0) i = 0;
+        if (i >= c.size()) i = c.size() - 1;
+        return c.get(i);
     }
 
     private static void sleep(long ms) {
