@@ -20,7 +20,7 @@ async def one(host, port, timeout=5.0):
 async def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 200
     hold = float(sys.argv[2]) if len(sys.argv) > 2 else 10
-    host, port = "127.0.0.1", 9001
+    host, port = "127.0.0.1", int(sys.argv[3]) if len(sys.argv) > 3 else 9001
     sem = asyncio.Semaphore(200)
     res = []
 

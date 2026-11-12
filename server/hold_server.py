@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-nat-limit-tester —— TCP 保持计数服务端
+nat-limit-tester —— TCP 保持计数服务端（单端口复用版）
 
 职责很窄：接受 TCP 连接后「不读不写只 hold」，并精确统计：
-  - current  当前存活连接数
-  - peak     本轮峰值（可 /reset 清零）
-  - total    累计 accept 次数
-  - refused  超过 MAX_CONNS 被拒绝的次数
-  - per_ip   按对端 IP 聚合（NAT 后同一公网 IP，用来看是不是只有一个来源）
+  current / peak / total / refused / per_ip
 
 为什么要服务端独立计数：
-  TCP 三次握手可能被本地 NAT / 中间设备「代答」成功，客户端以为连上了，
-  但服务端根本没收到。只有服务端自己数一遍，才能和客户端对账。
+  TCP 三次握手可能被本地 NAT 或中间设备「代答」成功，客户端以为连上了，
+  服务端根本没收到。只有服务端自己数一遍，才能和客户端对账。
 
-控制面走独立端口（默认 9002），带 token 鉴权，避免被公网随便拉取。
+单端口复用（关键设计）：
+  同一端口既接 hold 长连接，又提供 HTTP /stats 控制面。
+  识别方式：accept 后等 HTTP_PROBE 秒，期间收到数据 → 当 HTTP 处理；
+  收不到 → 当 hold 连接。hold 客户端本来就不发数据，所以判定可靠。
+  这样只需要在云安全组放行一个端口（80）。
 """
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ import socket
 import time
 from collections import defaultdict
 
+HTTP_PROBE = 0.20
+
 
 class Stats:
     def __init__(self, max_conns: int):
@@ -33,6 +35,7 @@ class Stats:
         self.peak = 0
         self.total = 0
         self.refused = 0
+        self.http_hits = 0
         self.per_ip_cur = defaultdict(int)
         self.per_ip_peak = defaultdict(int)
         self.started = time.time()
@@ -47,6 +50,7 @@ class Stats:
             "refused": self.refused,
             "max_conns": self.max_conns,
             "at_capacity": self.current >= self.max_conns,
+            "http_hits": self.http_hits,
             "uptime_s": round(time.time() - self.started, 1),
             "since_reset_s": round(time.time() - self.reset_at, 1),
             "clients": len(self.per_ip_cur),
@@ -68,7 +72,7 @@ STATS: Stats | None = None
 VERBOSE = False
 
 
-async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+async def handle_hold(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     assert STATS is not None
     sock = writer.get_extra_info("socket")
     peer = writer.get_extra_info("peername") or ("?", 0)
@@ -102,8 +106,6 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
         print(f"[hold] total={STATS.total} current={STATS.current} peak={STATS.peak}", flush=True)
 
     try:
-        # 不读不写：只是等对端关闭。read(1) 在无数据时会挂起到 EOF。
-        await reader.read(1)
         while True:
             chunk = await reader.read(4096)
             if not chunk:
@@ -121,17 +123,22 @@ async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             pass
 
 
-async def handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+async def handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, prefix: bytes) -> None:
     assert STATS is not None
+    STATS.http_hits += 1
     try:
-        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        rest = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        head = prefix + rest
     except (asyncio.TimeoutError, asyncio.IncompleteReadError, OSError):
         writer.close()
         return
+    await respond_http(writer, head)
 
+
+async def respond_http(writer: asyncio.StreamWriter, head: bytes) -> None:
+    assert STATS is not None
     line = head.split(b"\r\n", 1)[0].decode("latin-1")
     parts = line.split(" ")
-    method = parts[0] if parts else ""
     target = parts[1] if len(parts) > 1 else "/"
     path, _, query = target.partition("?")
 
@@ -142,27 +149,21 @@ async def handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             given = kv[6:]
 
     if token and given != token:
-        body = b'{"ok":false,"error":"bad token"}'
-        status = "403 Forbidden"
+        body, status = b'{"ok":false,"error":"bad token"}', "403 Forbidden"
     elif path == "/stats":
-        body = json.dumps(STATS.snapshot()).encode()
-        status = "200 OK"
+        body, status = json.dumps(STATS.snapshot()).encode(), "200 OK"
     elif path == "/reset":
         STATS.reset()
-        body = b'{"ok":true,"reset":true}'
-        status = "200 OK"
+        body, status = b'{"ok":true,"reset":true}', "200 OK"
     elif path == "/ping":
-        body = b'{"ok":true}'
-        status = "200 OK"
+        body, status = b'{"ok":true}', "200 OK"
     else:
-        body = b'{"ok":false,"error":"not found"}'
-        status = "404 Not Found"
+        body, status = b'{"ok":false,"error":"not found"}', "404 Not Found"
 
     writer.write(
         f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\n"
         f"Content-Length: {len(body)}\r\nConnection: close\r\n"
-        f"Access-Control-Allow-Origin: *\r\n\r\n".encode()
-        + body
+        f"Access-Control-Allow-Origin: *\r\n\r\n".encode() + body
     )
     try:
         await writer.drain()
@@ -171,12 +172,32 @@ async def handle_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     writer.close()
 
 
+async def handle_conn(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """先判断是 HTTP 还是 hold，再分派。"""
+    first = b""
+    try:
+        first = await asyncio.wait_for(reader.read(1), timeout=HTTP_PROBE)
+    except asyncio.TimeoutError:
+        first = b""
+    except (ConnectionResetError, OSError):
+        try:
+            writer.close()
+        except Exception:
+            pass
+        return
+
+    if first:
+        await handle_http(reader, writer, first)
+    else:
+        await handle_hold(reader, writer)
+
+
 async def main() -> None:
     global STATS, VERBOSE
     ap = argparse.ArgumentParser()
-    ap.add_argument("--hold-port", type=int, default=9001)
-    ap.add_argument("--http-port", type=int, default=9002)
-    ap.add_argument("--max-conns", type=int, default=15000)
+    ap.add_argument("--port", type=int, default=80, help="hold + HTTP 复用端口")
+    ap.add_argument("--extra-http-port", type=int, default=0, help="额外开一个纯 HTTP 端口（内网自测用）")
+    ap.add_argument("--max-conns", type=int, default=12000)
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
@@ -184,14 +205,25 @@ async def main() -> None:
     VERBOSE = args.verbose
     STATS = Stats(args.max_conns)
 
-    hold = await asyncio.start_server(handle_conn, args.bind, args.hold_port, backlog=8192)
-    http = await asyncio.start_server(handle_http, args.bind, args.http_port, backlog=128)
+    main_srv = await asyncio.start_server(handle_conn, args.bind, args.port, backlog=8192)
+    print(f"[hold]  {args.bind}:{args.port}  max={args.max_conns}  (HTTP 复用同端口)", flush=True)
 
-    print(f"[hold]  TCP hold  : {args.bind}:{args.hold_port}  max={args.max_conns}", flush=True)
-    print(f"[stats] HTTP 控制 : {args.bind}:{args.http_port}  /stats /reset /ping", flush=True)
+    servers = [main_srv]
+    if args.extra_http_port:
+        async def http_only(r, w):
+            assert STATS is not None
+            STATS.http_hits += 1
+            try:
+                head = await asyncio.wait_for(r.readuntil(b"\r\n\r\n"), timeout=5)
+            except Exception:
+                w.close()
+                return
+            await respond_http(w, head)
+        s2 = await asyncio.start_server(http_only, args.bind, args.extra_http_port, backlog=128)
+        servers.append(s2)
+        print(f"[stats] {args.bind}:{args.extra_http_port}  /stats /reset /ping", flush=True)
 
-    async with hold, http:
-        await asyncio.gather(hold.serve_forever(), http.serve_forever())
+    await asyncio.gather(*(s.serve_forever() for s in servers))
 
 
 if __name__ == "__main__":

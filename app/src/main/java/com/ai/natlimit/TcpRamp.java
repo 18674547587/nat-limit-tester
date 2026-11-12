@@ -24,7 +24,7 @@ public final class TcpRamp {
 
     public static final class Config {
         public String host = "";
-        public int port = 9001;
+        public int port = 80;
         public int start = 50;
         public double step = 1.15;
         public int maxTarget = 1200;

@@ -135,7 +135,7 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
 
         TcpRamp.Config c = new TcpRamp.Config();
         c.host = host;
-        c.port = parseInt(etPort, 9001);
+        c.port = parseInt(etPort, 80);
         c.start = parseInt(etStart, 50);
         c.step = parseDouble(etStep, 1.15);
         c.maxTarget = parseInt(etMax, 1200);
@@ -145,7 +145,7 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
         c.onuHost = etOnu.getText().toString().trim();
         c.probePort = parseInt(etProbePort, 80);
         c.statsToken = etToken.getText().toString().trim();
-        c.statsUrl = "http://" + host + ":9002";
+        c.statsUrl = "http://" + host + ":" + c.port;   // 与 hold 复用同一端口
 
         if (c.start < 1) c.start = 1;
         if (c.maxTarget < c.start) c.maxTarget = c.start;

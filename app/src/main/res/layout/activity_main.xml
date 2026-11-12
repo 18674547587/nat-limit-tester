@@ -60,7 +60,7 @@
                 android:layout_weight="1"
                 android:hint="端口"
                 android:inputType="number"
-                android:text="9001"
+                android:text="80"
                 android:textColor="#E8EAED"
                 android:textColorHint="#4A5568"
                 android:textSize="13sp" />

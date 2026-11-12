@@ -33,22 +33,28 @@
 ## 三、服务端
 
 ```bash
-# 启动（默认 TCP 9001 保持端口，9002 控制面）
-NLT_TOKEN=你的token python3 server/hold_server.py --max-conns 12000
+# 启动（单端口复用：80 同时接 hold 长连接和 HTTP /stats）
+NLT_TOKEN=你的token sudo -E python3 server/hold_server.py --port 80 --max-conns 12000
 ```
+
+**为什么只用一个端口**：云安全组通常只放行 80/443，开新端口要改控制台。
+所以 hold 连接和 HTTP 控制面复用 80：accept 后等 200 ms，收到数据当 HTTP，
+收不到当 hold 连接（hold 客户端本来就不发数据，判定可靠）。
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--hold-port` | 9001 | 客户端连这里 |
-| `--http-port` | 9002 | `/stats` `/reset` `/ping`，需 token |
-| `--max-conns` | 15000 | 超过即拒绝并计入 `refused` |
+| `--port` | 80 | hold + HTTP 复用端口（<1024 需 root 或 CAP_NET_BIND_SERVICE） |
+| `--max-conns` | 12000 | 超过即拒绝并计入 `refused` |
+
+线上实例：`systemd` 服务 `nat-limit-hold`，以 `AI` 用户运行 + `CAP_NET_BIND_SERVICE`，
+`MemoryMax=400M` 兜底，不会影响同机邮件服务。
 
 实测（本机 894 MB 内存的 VPS）：12000 条连接时服务端 RSS 约 90 MB，可用内存仍剩 295 MB。
 **建议 `--max-conns` 不超过 12000**，给同机其他服务留余量。
 
 ## 四、App
 
-1. 填服务端 IP、端口、token
+1. 填服务端 IP、端口（默认 80）、token
 2. 路由器 IP 默认自动填默认网关；光猫 IP 手动填（可选，但强烈建议填——不然无法区分是路由器还是光猫先崩）
 3. 开始测试
 
