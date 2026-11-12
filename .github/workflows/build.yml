@@ -1,0 +1,50 @@
+name: build-apk
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Ensure NDK and CMake
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+        run: |
+          echo "existing ndk:"; ls "$ANDROID_HOME/ndk" || true
+          echo "existing cmake:"; ls "$ANDROID_HOME/cmake" || true
+          if [ ! -d "$ANDROID_HOME/ndk/26.1.10909125" ]; then
+            echo "installing ndk 26.1.10909125"
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;26.1.10909125" > /dev/null || true
+          fi
+          if [ ! -d "$ANDROID_HOME/cmake/3.22.1" ]; then
+            echo "installing cmake 3.22.1"
+            yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "cmake;3.22.1" > /dev/null || true
+          fi
+          echo "--- after ---"
+          ls "$ANDROID_HOME/ndk" || true
+          ls "$ANDROID_HOME/cmake" || true
+
+      - name: Build debug APK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nat-limit-tester-apk
+          path: app/build/outputs/apk/debug/*.apk

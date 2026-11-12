@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(natlimit C)
+add_library(natlimit SHARED limits.c)
+find_library(log-lib log)
+target_link_libraries(natlimit ${log-lib})

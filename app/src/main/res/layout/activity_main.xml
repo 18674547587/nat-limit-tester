@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0E1116"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="14dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="连接数压测"
+            android:textColor="#E8EAED"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:textColor="#8B949E"
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:text="检测中…" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="服务端"
+            android:textColor="#58A6FF"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <EditText
+                android:id="@+id/etHost"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="3"
+                android:hint="服务端 IP"
+                android:inputType="text"
+                android:textColor="#E8EAED"
+                android:textColorHint="#4A5568"
+                android:textSize="13sp" />
+            <EditText
+                android:id="@+id/etPort"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="端口"
+                android:inputType="number"
+                android:text="9001"
+                android:textColor="#E8EAED"
+                android:textColorHint="#4A5568"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <EditText
+            android:id="@+id/etToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="stats token"
+            android:inputType="text"
+            android:textColor="#E8EAED"
+            android:textColorHint="#4A5568"
+            android:textSize="13sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="阶梯参数"
+            android:textColor="#58A6FF"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <EditText android:id="@+id/etStart" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="起始" android:inputType="number" android:text="50"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+            <EditText android:id="@+id/etStep" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="步进" android:inputType="numberDecimal" android:text="1.15"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+            <EditText android:id="@+id/etMax" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="上限" android:inputType="number" android:text="1200"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <EditText android:id="@+id/etHold" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="保持秒" android:inputType="number" android:text="15"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+            <EditText android:id="@+id/etWindow" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="并发窗口" android:inputType="number" android:text="200"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="探测目标（留空则跳过）"
+            android:textColor="#58A6FF"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <EditText android:id="@+id/etGw" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="路由器" android:inputType="text"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+            <EditText android:id="@+id/etOnu" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="光猫" android:inputType="text"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+            <EditText android:id="@+id/etProbePort" android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="探测端口" android:inputType="number" android:text="80"
+                android:textColor="#E8EAED" android:textColorHint="#4A5568" android:textSize="13sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:orientation="horizontal">
+            <Button
+                android:id="@+id/btnStart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:backgroundTint="#238636"
+                android:text="开始测试"
+                android:textColor="#FFFFFF" />
+            <Button
+                android:id="@+id/btnStop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="#DA3633"
+                android:enabled="false"
+                android:text="急停"
+                android:textColor="#FFFFFF" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:fontFamily="monospace"
+            android:textColor="#C9D1D9"
+            android:textIsSelectable="true"
+            android:textSize="11sp"
+            android:text="结果表将显示在这里" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="日志"
+            android:textColor="#58A6FF"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="24dp"
+            android:background="#161B22"
+            android:fontFamily="monospace"
+            android:padding="10dp"
+            android:textColor="#8B949E"
+            android:textIsSelectable="true"
+            android:textSize="10sp"
+            android:text="" />
+    </LinearLayout>
+</ScrollView>
