@@ -8,7 +8,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
-import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
@@ -20,15 +19,16 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-public class MainActivity extends Activity implements TcpRamp.Cb {
+public class MainActivity extends Activity implements TcpRamp.Cb, UdpRamp.Cb {
 
     private TextView tvStatus, tvLog, tvResult;
     private EditText etHost, etPort, etToken, etStart, etStep, etMax, etHold, etWindow,
             etGw, etOnu, etProbePort;
-    private Button btnStart, btnStop;
+    private Button btnStartTcp, btnStartUdp, btnStop;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private TcpRamp ramp;
+    private TcpRamp tcpRamp;
+    private UdpRamp udpRamp;
     private WifiManager.WifiLock wifiLock;
     private PowerManager.WakeLock wakeLock;
 
@@ -58,16 +58,17 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
         etGw = findViewById(R.id.etGw);
         etOnu = findViewById(R.id.etOnu);
         etProbePort = findViewById(R.id.etProbePort);
-        btnStart = findViewById(R.id.btnStart);
+        btnStartTcp = findViewById(R.id.btnStartTcp);
+        btnStartUdp = findViewById(R.id.btnStartUdp);
         btnStop = findViewById(R.id.btnStop);
 
-        btnStart.setOnClickListener(v -> startTest());
+        btnStartTcp.setOnClickListener(v -> startTcp());
+        btnStartUdp.setOnClickListener(v -> startUdp());
         btnStop.setOnClickListener(v -> stopTest());
 
         probeDevice();
     }
 
-    /** 开机自检：fd 上限、网关、WiFi 状态 */
     private void probeDevice() {
         new Thread(() -> {
             long[] lim = Limits.read();
@@ -83,11 +84,11 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
               .append("  hard=").append(lim[1])
               .append(Limits.available() ? "" : "  (native 未加载)")
               .append('\n');
-            sb.append("理论可建连接 : 约 ").append(Math.max(0, lim[0] - 40)).append(" 条")
-              .append("（要减掉已占用的 fd）\n");
+            sb.append("TCP 理论上限 : 约 ").append(Math.max(0, lim[0] - 40)).append(" 条（1 连接 = 1 fd）\n");
+            sb.append("UDP 理论上限 : 不受 fd 限制（1 个 socket 打多个目的端口）\n");
             sb.append("默认网关     : ").append(gwIp.isEmpty() ? "未获取" : gwIp).append('\n');
             sb.append("WiFi         : ").append(ssid).append('\n');
-            sb.append("提示         : WiFi 测试会引入无线噪声，手机尽量靠近路由器");
+            sb.append("提示         : WiFi 会引入噪声，手机尽量靠近路由器");
 
             ui.post(() -> {
                 tvStatus.setText(sb.toString());
@@ -122,20 +123,28 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
         }
     }
 
-    private void startTest() {
+    private boolean prepare() {
         String host = etHost.getText().toString().trim();
         if (host.isEmpty()) {
             appendLog("请先填写服务端 IP");
-            return;
+            return false;
         }
         rows.clear();
         logBuf.setLength(0);
         tableBuf.setLength(0);
         tvResult.setText("");
+        acquireLocks();
+        btnStartTcp.setEnabled(false);
+        btnStartUdp.setEnabled(false);
+        btnStop.setEnabled(true);
+        return true;
+    }
 
+    private void startTcp() {
+        if (!prepare()) return;
         TcpRamp.Config c = new TcpRamp.Config();
-        c.host = host;
-        c.port = parseInt(etPort, 80);
+        c.host = etHost.getText().toString().trim();
+        c.port = parseInt(etPort, 20120);
         c.start = parseInt(etStart, 50);
         c.step = parseDouble(etStep, 1.15);
         c.maxTarget = parseInt(etMax, 1200);
@@ -145,29 +154,53 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
         c.onuHost = etOnu.getText().toString().trim();
         c.probePort = parseInt(etProbePort, 80);
         c.statsToken = etToken.getText().toString().trim();
-        c.statsUrl = "http://" + host + ":" + c.port;   // 与 hold 复用同一端口
+        c.statsUrl = "http://" + c.host + ":" + c.port;
 
         if (c.start < 1) c.start = 1;
         if (c.maxTarget < c.start) c.maxTarget = c.start;
         if (c.holdSec < 3) c.holdSec = 3;
         if (c.window < 1) c.window = 1;
 
-        acquireLocks();
-        btnStart.setEnabled(false);
-        btnStop.setEnabled(true);
+        appendLog(String.format(Locale.US, "TCP 开始：%d→%d，步进 %.2f，保持 %ds",
+                c.start, c.maxTarget, c.step, c.holdSec));
+        tcpRamp = new TcpRamp(c, this);
+        tcpRamp.start();
+    }
 
-        appendLog(String.format(Locale.US,
-                "开始：目标 %d→%d，步进 %.2f，每级保持 %ds，窗口 %d",
-                c.start, c.maxTarget, c.step, c.holdSec, c.window));
+    private void startUdp() {
+        if (!prepare()) return;
+        UdpRamp.Config c = new UdpRamp.Config();
+        c.host = etHost.getText().toString().trim();
+        c.port = parseInt(etPort, 20120);
+        c.start = parseInt(etStart, 100);
+        c.step = parseDouble(etStep, 1.15);
+        c.maxTarget = parseInt(etMax, 3000);
+        c.holdSec = parseInt(etHold, 15);
+        c.gwHost = etGw.getText().toString().trim();
+        c.probePort = parseInt(etProbePort, 80);
+        c.statsToken = etToken.getText().toString().trim();
+        c.statsUrl = "http://" + c.host + ":" + c.port;
 
-        ramp = new TcpRamp(c, this);
-        ramp.start();
+        if (c.start < 1) c.start = 1;
+        if (c.maxTarget < c.start) c.maxTarget = c.start;
+        if (c.holdSec < 3) c.holdSec = 3;
+
+        appendLog(String.format(Locale.US, "UDP 开始：%d→%d，步进 %.2f，保持 %ds，目的端口 %d",
+                c.start, c.maxTarget, c.step, c.holdSec, c.port));
+        udpRamp = new UdpRamp(c, this);
+        udpRamp.start();
     }
 
     private void stopTest() {
-        if (ramp != null) ramp.stop();
+        if (tcpRamp != null) tcpRamp.stop();
+        if (udpRamp != null) udpRamp.stop();
         appendLog("已急停，正在断开全部连接");
-        btnStart.setEnabled(true);
+        finishUi();
+    }
+
+    private void finishUi() {
+        btnStartTcp.setEnabled(true);
+        btnStartUdp.setEnabled(true);
         btnStop.setEnabled(false);
         releaseLocks();
     }
@@ -196,12 +229,10 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
         try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); } catch (Throwable ignored) { }
     }
 
-    // ---------- TcpRamp.Cb ----------
+    // ---------- TCP 回调 ----------
 
     @Override
-    public void onLog(String msg) {
-        ui.post(() -> appendLog(msg));
-    }
+    public void onLog(String msg) { ui.post(() -> appendLog(msg)); }
 
     private void appendLog(String msg) {
         logBuf.append(msg).append('\n');
@@ -222,8 +253,7 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
                 rtt(lv.worstGw), rtt(lv.worstOnu), lv.serverCurrent, lv.serverPeak,
                 lv.degraded() ? "⚠ " + lv.verdict : "ok");
 
-        rows.add(String.format(Locale.US,
-                "%d,%d,%d,%d,%s,%s,%s,%d,%d,%s,%s",
+        rows.add(String.format(Locale.US, "%d,%d,%d,%d,%s,%s,%s,%d,%d,%s,%s",
                 lv.target, lv.ok, lv.failed, lv.buildMs,
                 f(lv.worstGw), f(lv.worstOnu),
                 errs.toString().replace(",", ";"),
@@ -239,25 +269,56 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
 
     @Override
     public void onDone(TcpRamp.Level stop, String summary) {
+        finish("TCP", stop == null ? -1 : stop.target,
+                stop == null ? "" : stop.detail, summary,
+                "target,ok,failed,build_ms,worst_rtt_gw,worst_rtt_onu,errors,server_current,server_peak,verdict,detail");
+    }
+
+    // ---------- UDP 回调 ----------
+
+    @Override
+    public void onLevel(UdpRamp.Level lv) {
+        String row = String.format(Locale.US,
+                "%5d | 已发 %5d 失败 %4d | 发送 %5dms | 路由 %s | 服务端会话 %d/%d | %s",
+                lv.target, lv.sent, lv.sendFailed, lv.sendMs,
+                rtt(lv.worstGw), lv.serverSessions, lv.serverPeak,
+                lv.degraded() ? "⚠ " + lv.verdict : "ok");
+
+        rows.add(String.format(Locale.US, "%d,%d,%d,%d,%s,%d,%d,%s,%s",
+                lv.target, lv.sent, lv.sendFailed, lv.sendMs,
+                f(lv.worstGw), lv.serverSessions, lv.serverPeak,
+                lv.degraded() ? "DEGRADED" : "OK",
+                lv.detail.replace(",", ";")));
+
+        ui.post(() -> {
+            tableBuf.append(row).append('\n');
+            tvResult.setText(tableBuf.toString());
+        });
+    }
+
+    @Override
+    public void onDone(UdpRamp.Level stop, String summary) {
+        finish("UDP", stop == null ? -1 : stop.target,
+                stop == null ? "" : stop.detail, summary,
+                "target,sent,send_failed,send_ms,worst_rtt_gw,server_sessions,server_peak,verdict,detail");
+    }
+
+    private void finish(String mode, int target, String detail, String summary, String header) {
         StringBuilder sb = new StringBuilder();
         sb.append("结论：").append(summary).append('\n');
-        if (stop != null) {
-            sb.append("触发档位：").append(stop.target).append(" 条\n");
-            if (!stop.detail.isEmpty()) sb.append("细节：").append(stop.detail).append('\n');
+        if (target > 0) {
+            sb.append("触发档位：").append(target).append(mode.equals("TCP") ? " 条连接" : " 条会话").append('\n');
+            if (detail != null && !detail.isEmpty()) sb.append("细节：").append(detail).append('\n');
         }
-        sb.append("建议：等 2 分钟让 NAT 表项老化后再测，别连着测");
+        sb.append("建议：等 2 分钟让 NAT 表项老化后再测");
 
-        File f = ResultStore.save(this,
-                "target,ok,failed,build_ms,worst_rtt_gw,worst_rtt_onu,errors,server_current,server_peak,verdict,detail",
-                rows, sb.toString());
+        File f = ResultStore.save(this, header, rows, sb.toString());
 
         ui.post(() -> {
             appendLog(summary);
             if (f != null) appendLog("已保存：" + f.getAbsolutePath());
-            btnStart.setEnabled(true);
-            btnStop.setEnabled(false);
             tvResult.setText(tableBuf + "\n" + sb);
-            releaseLocks();
+            finishUi();
         });
     }
 
@@ -274,7 +335,8 @@ public class MainActivity extends Activity implements TcpRamp.Cb {
 
     @Override
     protected void onDestroy() {
-        if (ramp != null) ramp.stop();
+        if (tcpRamp != null) tcpRamp.stop();
+        if (udpRamp != null) udpRamp.stop();
         releaseLocks();
         super.onDestroy();
     }

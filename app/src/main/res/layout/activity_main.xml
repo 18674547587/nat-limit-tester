@@ -140,12 +140,21 @@
             android:layout_marginTop="14dp"
             android:orientation="horizontal">
             <Button
-                android:id="@+id/btnStart"
+                android:id="@+id/btnStartTcp"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="2"
                 android:backgroundTint="#238636"
-                android:text="开始测试"
+                android:text="TCP 测试"
+                android:textColor="#FFFFFF" />
+            <Button
+                android:id="@+id/btnStartUdp"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="#1F6FEB"
+                android:text="UDP 测试"
                 android:textColor="#FFFFFF" />
             <Button
                 android:id="@+id/btnStop"

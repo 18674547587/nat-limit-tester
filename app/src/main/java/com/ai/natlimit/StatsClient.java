@@ -31,6 +31,27 @@ public final class StatsClient {
         }
     }
 
+    /** @return {udp.sessions, udp.peak}，失败返回 {-1,-1} */
+    public static long[] fetchUdp(String baseUrl, String token) {
+        String url = baseUrl.replaceAll("/+$", "") + "/stats?token=" + token;
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(3000);
+            c.setReadTimeout(3000);
+            if (c.getResponseCode() != 200) return new long[]{-1, -1};
+            String body = read(c.getInputStream());
+            int i = body.indexOf("\"udp\"");
+            if (i < 0) return new long[]{-1, -1};
+            String sub = body.substring(i);
+            return new long[]{pick(sub, "\"sessions\":"), pick(sub, "\"peak\":")};
+        } catch (Exception e) {
+            return new long[]{-1, -1};
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
     private static long pick(String json, String key) {
         int i = json.indexOf(key);
         if (i < 0) return -1;

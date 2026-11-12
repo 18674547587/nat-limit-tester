@@ -22,10 +22,124 @@ import asyncio
 import json
 import os
 import socket
+import struct
+import threading
 import time
 from collections import defaultdict
 
 HTTP_PROBE = 0.20
+
+
+class UdpTracker:
+    """
+    UDP 会话统计：靠 AF_PACKET 抓包，不依赖内核给不给端口。
+
+    为什么这么干：
+      UDP 无连接，NAT 表项是按 (源IP,源端口,目的IP,目的端口) 建的。
+      App 用同一个 socket 打不同「目的端口」，每个目的端口就是一条独立会话。
+      服务端不需要真的监听那些端口 —— 只要网卡上能看到包，就能数出来。
+
+    只统计入站、目的端口在 [port_min, port_max] 的包，避免把 DNS/QUIC 算进来。
+    """
+
+    def __init__(self, port_min: int, port_max: int, idle_timeout: float = 90.0):
+        self.port_min = port_min
+        self.port_max = port_max
+        self.idle_timeout = idle_timeout
+        self.flows: dict[tuple, float] = {}
+        self.peak = 0
+        self.total_pkts = 0
+        self.reset_at = time.time()
+        self.lock = threading.Lock()
+
+    def touch(self, src_ip: str, src_port: int, dst_port: int, now: float) -> None:
+        key = (src_ip, src_port, dst_port)
+        with self.lock:
+            self.flows[key] = now
+            self.total_pkts += 1
+            n = len(self.flows)
+            if n > self.peak:
+                self.peak = n
+
+    def gc(self, now: float) -> None:
+        with self.lock:
+            dead = [k for k, t in self.flows.items() if now - t > self.idle_timeout]
+            for k in dead:
+                del self.flows[k]
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            return {
+                "sessions": len(self.flows),
+                "peak": self.peak,
+                "total_pkts": self.total_pkts,
+                "port_range": [self.port_min, self.port_max],
+                "clients": len({k[0] for k in self.flows}),
+                "since_reset_s": round(time.time() - self.reset_at, 1),
+            }
+
+    def reset(self) -> None:
+        with self.lock:
+            self.peak = 0
+            self.total_pkts = 0
+            self.flows.clear()
+            self.reset_at = time.time()
+
+
+def udp_srcport_loop(bind_port: int, tracker: UdpTracker,
+                     stop_event: threading.Event) -> None:
+    """
+    UDP 会话统计：在 UDP 20120 上真实监听，按「源端口」区分会话。
+
+    为什么是这个方案（被现实逼出来的）：
+      1) 用不同「目的端口」造会话最省 fd，但阿里云安全组只放行了 20120 一个端口，
+         发到 10000-12999 的包全被丢弃，测不出来。
+      2) 用 AF_PACKET 抓包 + 不监听端口，内核会回 ICMP port unreachable，
+         路由器收到 ICMP 会立刻删掉对应 NAT 表项，会话数永远归零。
+      3) 所以：目的端口固定 20120（已放行），每个会话换一个「源端口」。
+         服务端在这个端口上真的收包，内核不会回 ICMP。
+
+    代价：App 端每条会话要占一个 socket = 一个 fd，和 TCP 模式一样受 fd 限制。
+    好处：不需要用户改任何安全组规则。
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
+    except OSError:
+        pass
+    try:
+        s.bind(("0.0.0.0", bind_port))
+    except OSError as e:
+        print(f"[udp]  绑定 UDP {bind_port} 失败：{e}，UDP 统计未启用", flush=True)
+        return
+
+    s.settimeout(1.0)
+    print(f"[udp]  监听 UDP {bind_port}，按源端口统计会话数", flush=True)
+
+    last_gc = time.time()
+    while not stop_event.is_set():
+        try:
+            _data, addr = s.recvfrom(2048)
+        except socket.timeout:
+            now = time.time()
+            if now - last_gc > 5:
+                tracker.gc(now)
+                last_gc = now
+            continue
+        except OSError:
+            continue
+
+        now = time.time()
+        tracker.touch(addr[0], addr[1], bind_port, now)
+        if now - last_gc > 5:
+            tracker.gc(now)
+            last_gc = now
+
+    try:
+        s.close()
+    except OSError:
+        pass
 
 
 class Stats:
@@ -58,6 +172,7 @@ class Stats:
                 ip: {"current": self.per_ip_cur[ip], "peak": self.per_ip_peak[ip]}
                 for ip in sorted(self.per_ip_cur, key=lambda k: -self.per_ip_cur[k])[:20]
             },
+            "udp": UDP.snapshot() if UDP is not None else None,
         }
 
     def reset(self) -> None:
@@ -66,9 +181,12 @@ class Stats:
         self.refused = 0
         self.per_ip_peak.clear()
         self.reset_at = time.time()
+        if UDP is not None:
+            UDP.reset()
 
 
 STATS: Stats | None = None
+UDP: UdpTracker | None = None
 VERBOSE = False
 
 
@@ -199,11 +317,23 @@ async def main() -> None:
     ap.add_argument("--extra-http-port", type=int, default=0, help="额外开一个纯 HTTP 端口（内网自测用）")
     ap.add_argument("--max-conns", type=int, default=12000)
     ap.add_argument("--bind", default="0.0.0.0")
+    ap.add_argument("--udp-port", type=int, default=20120,
+                    help="UDP 会话统计端口（按源端口区分会话），设 0 关闭")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
+    global UDP
     VERBOSE = args.verbose
     STATS = Stats(args.max_conns)
+
+    stop_event = threading.Event()
+    if args.udp_port:
+        UDP = UdpTracker(args.udp_port, args.udp_port)
+        threading.Thread(
+            target=udp_srcport_loop,
+            args=(args.udp_port, UDP, stop_event),
+            name="udp-srcport", daemon=True,
+        ).start()
 
     main_srv = await asyncio.start_server(handle_conn, args.bind, args.port, backlog=8192)
     print(f"[hold]  {args.bind}:{args.port}  max={args.max_conns}  (HTTP 复用同端口)", flush=True)
